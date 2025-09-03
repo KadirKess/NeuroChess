@@ -32,10 +32,10 @@ def create_dataloaders(
     )
 
     train_loader = DataLoader(
-        train_dataset, batch_size=batch_size, num_workers=4, pin_memory=True
+        train_dataset, batch_size=batch_size, num_workers=5, pin_memory=True
     )
     val_loader = DataLoader(
-        val_dataset, batch_size=batch_size, num_workers=4, pin_memory=True
+        val_dataset, batch_size=batch_size, num_workers=5, pin_memory=True
     )
 
     return train_loader, val_loader
