@@ -161,11 +161,11 @@ class IterablePositionsDataset(IterableDataset):
     def __len__(self):
         pyarrow_dataset = ds.dataset(self.parquet_path, format="parquet")
         total_rows = pyarrow_dataset.count_rows()
-        
+
         # Calculate the number of rows in the subset for this instance
         start_row = int(self.start_frac * total_rows)
         end_row = int(self.end_frac * total_rows)
-        
+
         return end_row - start_row
 
     def _process_row(self, row):
@@ -174,24 +174,28 @@ class IterablePositionsDataset(IterableDataset):
         mate = row["mate"]
         cp = row["cp"]
 
+        if isinstance(mate, str):
+            if mate.startswith("#"):
+                mate = mate[1:]
+        try:
+            mate = float(mate)
+        except (ValueError, TypeError):
+            mate = np.nan
+
         if mate == 0.0 or np.isnan(mate):
             game_state = 0  # Normal
             value = cp / 100.0
-
         elif mate > 0:
-            game_state = 1  # Checkmate for white
-            value = mate
-
+            game_state = 1  # Mate in X for white
+            value = 1.0
         else:
-            game_state = 2  # Checkmate for black
-            value = abs(mate)
+            game_state = 2  # Mate in X for black
+            value = -1.0
 
-        first_move = row["line"].split(" ")[0]
-        best_move_idx = self.move_to_idx.get(first_move, -1)
+        # Get policy tensor
+        policy_tensor = torch.zeros(len(self.move_to_idx))
+        move_idx = self.move_to_idx.get(row["move"], -1)
+        if move_idx != -1:
+            policy_tensor[move_idx] = 1.0
 
-        return {
-            "board_tensor": torch.from_numpy(board_tensor).float(),
-            "game_state_target": torch.tensor(game_state, dtype=torch.long),
-            "value_target": torch.tensor(value, dtype=torch.float32),
-            "best_move": torch.tensor(best_move_idx, dtype=torch.long),
-        }
+        return board_tensor, game_state, value, policy_tensor
