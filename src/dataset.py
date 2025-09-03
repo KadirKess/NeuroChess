@@ -82,9 +82,10 @@ def _get_board_tensor(fen: str) -> np.ndarray:
 
 
 class IterablePositionsDataset(IterableDataset):
-    def __init__(self, parquet_path, start_frac=0.0, end_frac=1.0):
+    def __init__(self, parquet_path, batch_size, start_frac=0.0, end_frac=1.0):
         super().__init__()
         self.parquet_path = parquet_path
+        self.batch_size = batch_size
 
         # Get total rows once for splitting
         pyarrow_dataset = ds.dataset(self.parquet_path, format="parquet")

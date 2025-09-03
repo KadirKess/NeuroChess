@@ -23,12 +23,12 @@ def create_dataloaders(
     """
     # Create a dataset instance for the training split
     train_dataset = IterablePositionsDataset(
-        parquet_path, start_frac=0.0, end_frac=train_percent
+        parquet_path, batch_size=batch_size, start_frac=0.0, end_frac=train_percent
     )
 
     # Create a dataset instance for the validation split
     val_dataset = IterablePositionsDataset(
-        parquet_path, start_frac=train_percent, end_frac=1.0
+        parquet_path, batch_size=batch_size, start_frac=train_percent, end_frac=1.0
     )
 
     train_loader = DataLoader(
