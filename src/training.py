@@ -34,10 +34,10 @@ def create_dataloaders(
     # Shuffling is often handled by the dataset's __iter__ method if needed.
     # Here, we rely on the inherent randomness of the source data.
     train_loader = DataLoader(
-        train_dataset, batch_size=batch_size, num_workers=2, pin_memory=True
+        train_dataset, batch_size=batch_size, num_workers=12, pin_memory=True
     )
     val_loader = DataLoader(
-        val_dataset, batch_size=batch_size, num_workers=2, pin_memory=True
+        val_dataset, batch_size=batch_size, num_workers=12, pin_memory=True
     )
 
     return train_loader, val_loader
@@ -124,7 +124,7 @@ def training(
             # Once ever 200 iterations, print the training loss
             if i % 200 == 0:
                 print(
-                    f"Epoch {epoch+1}, Iteration {i}, Training Loss: {total_loss.item()}"
+                    f"\nEpoch {epoch+1}, Iteration {i}, Training Loss: {total_loss.item()}"
                 )
 
         # Compute the average training loss
