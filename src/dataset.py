@@ -3,7 +3,7 @@
 import torch
 from torch.utils.data import IterableDataset, get_worker_info
 import numpy as np
-import pyarrow.dataset as ds
+import pyarrow.parquet as pq
 import chess
 
 # Local imports
@@ -82,61 +82,67 @@ def _get_board_tensor(fen: str) -> np.ndarray:
 
 
 class IterablePositionsDataset(IterableDataset):
-    def __init__(self, parquet_path, start_frac=0.0, end_frac=1.0):
+    def __init__(
+        self, parquet_path: str, start_frac: float = 0.0, end_frac: float = 1.0
+    ):
         super().__init__()
         self.parquet_path = parquet_path
-        self.start_frac = start_frac
-        self.end_frac = end_frac
 
-        # This mapping is needed for each item, so we create it once
+        pq_file = pq.ParquetFile(parquet_path)
+        total_rows = pq_file.metadata.num_rows
+
+        self.start_row = int(start_frac * total_rows)
+        self.end_row = int(end_frac * total_rows)
+        self.num_rows = self.end_row - self.start_row
+
         all_possible_moves = get_all_legal_moves()
         self.move_to_idx = {move: i for i, move in enumerate(all_possible_moves)}
 
     def __iter__(self):
-        # Create a pyarrow dataset - this is memory-efficient
-        pyarrow_dataset = ds.dataset(self.parquet_path, format="parquet")
-
-        # Get all batches (row groups) from the dataset
-        all_batches = list(pyarrow_dataset.to_batches(batch_size=10_000))
-
-        # Determine the subset of batches for this dataset instance (for train/val split)
-        num_batches = len(all_batches)
-        start_idx = int(self.start_frac * num_batches)
-        end_idx = int(self.end_frac * num_batches)
-        target_batches = all_batches[start_idx:end_idx]
-
-        # Distribute work among workers
         worker_info = get_worker_info()
-        if worker_info is None:
-            # Single-process data loading, this process handles all its target batches
-            batches_for_this_worker = target_batches
-        else:
-            # Multi-process data loading, split the target batches among workers
-            num_workers = worker_info.num_workers
-            worker_id = worker_info.id
-            batches_for_this_worker = [
-                b for i, b in enumerate(target_batches) if i % num_workers == worker_id
-            ]
+        pq_file = pq.ParquetFile(self.parquet_path)
 
-        # Process and yield each row from the assigned batches
-        for batch in batches_for_this_worker:
-            df = batch.to_pandas()
+        rows_seen = 0
+        batch_idx = -1
 
-            df = df.sample(frac=1).reset_index(drop=True)
+        for rg in range(pq_file.num_row_groups):
+            for batch in pq_file.iter_batches(batch_size=2048, row_groups=[rg]):
+                batch_idx += 1
 
-            for _, row in df.iterrows():
-                yield self._process_row(row)
+                # Distribute batches among workers
+                if worker_info and (
+                    batch_idx % worker_info.num_workers != worker_info.id
+                ):
+                    rows_seen += len(batch)
+                    continue
+
+                batch_start_row = rows_seen
+                batch_end_row = rows_seen + len(batch)
+                rows_seen = batch_end_row
+
+                # Check if this batch overlaps with the desired slice
+                if batch_end_row < self.start_row or batch_start_row >= self.end_row:
+                    continue
+
+                # Calculate the slice of the batch we need
+                slice_start = max(0, self.start_row - batch_start_row)
+                slice_end = min(len(batch), self.end_row - batch_start_row)
+
+                if slice_start >= slice_end:
+                    continue
+
+                sliced_batch = batch.slice(slice_start, slice_end - slice_start)
+
+                data = sliced_batch.to_pydict()
+                indices = np.arange(len(sliced_batch))
+                np.random.shuffle(indices)
+
+                for i in indices:
+                    row = {key: val[i] for key, val in data.items()}
+                    yield self._process_row(row)
 
     def __len__(self):
-        """Returns the number of samples in the dataset."""
-        pyarrow_dataset = ds.dataset(self.parquet_path, format="parquet")
-        total_rows = pyarrow_dataset.count_rows()
-
-        # Calculate the number of rows in the subset for this instance
-        start_row = int(self.start_frac * total_rows)
-        end_row = int(self.end_frac * total_rows)
-
-        return end_row - start_row
+        return self.num_rows
 
     def _process_row(self, row):
         """Processes a single row from the Parquet file into tensors."""
@@ -145,7 +151,7 @@ class IterablePositionsDataset(IterableDataset):
         mate = row["mate"]
         cp = row["cp"]
 
-        if mate == 0.0 or np.isnan(mate):
+        if mate is None or mate == 0.0:
             game_state = 0  # Normal
             value = cp / 100.0
 
