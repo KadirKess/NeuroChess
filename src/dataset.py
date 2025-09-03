@@ -98,12 +98,26 @@ class IterablePositionsDataset(IterableDataset):
         self.move_to_idx = {move: i for i, move in enumerate(all_possible_moves)}
 
     def __iter__(self):
+        worker_info = torch.utils.data.get_worker_info()
+        if worker_info is None:
+            worker_id = 0
+            num_workers = 1
+        else:
+            worker_id = worker_info.id
+            num_workers = worker_info.num_workers
+
+        chunk_size = self.num_rows // num_workers
+        start_row = worker_id * chunk_size
+        end_row = start_row + chunk_size
+        if worker_id == num_workers - 1:
+            end_row = self.num_rows
+
         pyarrow_dataset = ds.dataset(self.parquet_path, format="parquet")
 
         # Create a scanner that will read only the required rows
         scanner = pyarrow_dataset.scanner(
-            skip_rows=self.worker_id * self.worker_chunk_size,
-            limit=self.worker_chunk_size,
+            skip_rows=start_row,
+            limit=end_row - start_row,
             batch_size=self.batch_size,
             columns={"fen": True, "mate": True, "cp": True, "line": True},
         )
