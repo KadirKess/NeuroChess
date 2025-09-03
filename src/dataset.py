@@ -7,15 +7,19 @@ import numpy as np
 class PositionsDataset(Dataset):
     def __init__(self, processed_data_path):
         self.board_tensors = np.load(
-            f"{processed_data_path}/board_tensors.npy", mmap_mode="r"
+            f"{processed_data_path}/board_tensors.npy", mmap_mode="r", allow_pickle=True
         )
         self.game_state_target = np.load(
-            f"{processed_data_path}/game_state_target.npy", mmap_mode="r"
+            f"{processed_data_path}/game_state_target.npy",
+            mmap_mode="r",
+            allow_pickle=True,
         )
         self.value_target = np.load(
-            f"{processed_data_path}/value_target.npy", mmap_mode="r"
+            f"{processed_data_path}/value_target.npy", mmap_mode="r", allow_pickle=True
         )
-        self.best_move = np.load(f"{processed_data_path}/best_move.npy", mmap_mode="r")
+        self.best_move = np.load(
+            f"{processed_data_path}/best_move.npy", mmap_mode="r", allow_pickle=True
+        )
 
     def __len__(self):
         return len(self.board_tensors)
