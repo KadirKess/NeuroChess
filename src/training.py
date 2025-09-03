@@ -58,7 +58,7 @@ def validation(
             value_target = batch["value_target"].to(device)
             game_state_target = batch["game_state_target"].to(device)
 
-            with autocast():
+            with autocast(device_type=device.type):
                 outputs = model(inputs)
 
                 best_move_loss = criterion[0](outputs["best_move"], best_move_target)
@@ -109,7 +109,7 @@ def training(
             value_target = batch["value_target"].to(device)
             game_state_target = batch["game_state_target"].to(device)
 
-            with autocast():
+            with autocast(device_type=device.type):
                 # Get the model outputs
                 outputs = model(inputs)
 
