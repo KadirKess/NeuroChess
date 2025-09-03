@@ -30,9 +30,6 @@ def create_dataloaders(
         parquet_path, start_frac=train_percent, end_frac=1.0, shuffle_buffer_size=10000
     )
 
-    # Note: For iterable datasets, 'shuffle' is not applicable in the same way.
-    # Shuffling is often handled by the dataset's __iter__ method if needed.
-    # Here, we rely on the inherent randomness of the source data.
     train_loader = DataLoader(
         train_dataset, batch_size=batch_size, num_workers=4, pin_memory=True
     )

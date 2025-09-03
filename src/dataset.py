@@ -158,6 +158,16 @@ class IterablePositionsDataset(IterableDataset):
                 buffer.pop()
                 yield item_to_yield
 
+    def __len__(self):
+        pyarrow_dataset = ds.dataset(self.parquet_path, format="parquet")
+        total_rows = pyarrow_dataset.count_rows()
+        
+        # Calculate the number of rows in the subset for this instance
+        start_row = int(self.start_frac * total_rows)
+        end_row = int(self.end_frac * total_rows)
+        
+        return end_row - start_row
+
     def _process_row(self, row):
 
         board_tensor = _get_board_tensor(row["fen"])
