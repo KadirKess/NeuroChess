@@ -113,7 +113,7 @@ def training(
         avg_val_loss = validation(model, val_loader, criterion, device)
 
         # Log the losses
-        training_loss.append(avg_train_loss.item())
+        training_loss.append(avg_train_loss)
         validation_loss.append(avg_val_loss)
 
         print(
