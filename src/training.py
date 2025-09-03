@@ -15,8 +15,12 @@ def create_dataloaders(
     train_dataset, val_dataset = torch.utils.data.random_split(
         dataset, [train_size, val_size]
     )
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=shuffle, num_workers=4)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=4)
+    train_loader = DataLoader(
+        train_dataset, batch_size=batch_size, shuffle=shuffle, num_workers=4
+    )
+    val_loader = DataLoader(
+        val_dataset, batch_size=batch_size, shuffle=False, num_workers=4
+    )
     return train_loader, val_loader
 
 
@@ -64,17 +68,19 @@ def training(
     validation_loss = []
     best_loss = float("inf")
 
-    # Start training loop
-    model.train()
+    for epoch in range(epochs):
 
-    for epoch in tqdm(range(epochs), desc="Training Progress"):
+        print(f"Starting epoch {epoch+1}/{epochs}")
 
         total_train_loss = 0.0
+
+        # Start training loop
+        model.train()
 
         for i, batch in tqdm(
             enumerate(train_loader),
             total=len(train_loader),
-            desc=f"Epoch {epoch+1}/{epochs}",
+            desc=f"Training progress",
         ):
 
             # We get the inputs and targets
