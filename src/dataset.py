@@ -82,13 +82,15 @@ def _get_board_tensor(fen: str) -> np.ndarray:
 
 
 class IterablePositionsDataset(IterableDataset):
-    def __init__(self, parquet_path: str, start_frac: float = 0.0, end_frac: float = 1.0):
+    def __init__(
+        self, parquet_path: str, start_frac: float = 0.0, end_frac: float = 1.0
+    ):
         super().__init__()
         self.parquet_path = parquet_path
-        
+
         pq_file = pq.ParquetFile(parquet_path)
-        total_rows = pq_file.num_rows
-        
+        total_rows = pq_file.metadata.num_rows
+
         self.start_row = int(start_frac * total_rows)
         self.end_row = int(end_frac * total_rows)
         self.num_rows = self.end_row - self.start_row
@@ -102,13 +104,15 @@ class IterablePositionsDataset(IterableDataset):
 
         rows_seen = 0
         batch_idx = -1
-        
+
         for rg in range(pq_file.num_row_groups):
             for batch in pq_file.iter_batches(batch_size=2048, row_groups=[rg]):
                 batch_idx += 1
-                
+
                 # Distribute batches among workers
-                if worker_info and (batch_idx % worker_info.num_workers != worker_info.id):
+                if worker_info and (
+                    batch_idx % worker_info.num_workers != worker_info.id
+                ):
                     rows_seen += len(batch)
                     continue
 
@@ -119,16 +123,16 @@ class IterablePositionsDataset(IterableDataset):
                 # Check if this batch overlaps with the desired slice
                 if batch_end_row < self.start_row or batch_start_row >= self.end_row:
                     continue
-                
+
                 # Calculate the slice of the batch we need
                 slice_start = max(0, self.start_row - batch_start_row)
                 slice_end = min(len(batch), self.end_row - batch_start_row)
-                
+
                 if slice_start >= slice_end:
                     continue
 
                 sliced_batch = batch.slice(slice_start, slice_end - slice_start)
-                
+
                 data = sliced_batch.to_pydict()
                 indices = np.arange(len(sliced_batch))
                 np.random.shuffle(indices)
@@ -139,7 +143,6 @@ class IterablePositionsDataset(IterableDataset):
 
     def __len__(self):
         return self.num_rows
-
 
     def _process_row(self, row):
         """Processes a single row from the Parquet file into tensors."""
