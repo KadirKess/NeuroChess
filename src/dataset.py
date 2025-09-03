@@ -85,58 +85,54 @@ class IterablePositionsDataset(IterableDataset):
     def __init__(self, parquet_path, start_frac=0.0, end_frac=1.0):
         super().__init__()
         self.parquet_path = parquet_path
-        self.start_frac = start_frac
-        self.end_frac = end_frac
+        
+        # Get total rows once for splitting
+        pyarrow_dataset = ds.dataset(self.parquet_path, format="parquet")
+        self.total_rows = pyarrow_dataset.count_rows()
+        self.start_row = int(start_frac * self.total_rows)
+        self.end_row = int(end_frac * self.total_rows)
+        self.num_rows = self.end_row - self.start_row
 
         # This mapping is needed for each item, so we create it once
         all_possible_moves = get_all_legal_moves()
         self.move_to_idx = {move: i for i, move in enumerate(all_possible_moves)}
 
     def __iter__(self):
-        # Create a pyarrow dataset - this is memory-efficient
         pyarrow_dataset = ds.dataset(self.parquet_path, format="parquet")
+        
+        # Create a scanner that will read only the required rows
+        scanner = pyarrow_dataset.scanner(
+            offset=self.start_row,
+            limit=self.num_rows
+        )
 
-        # Get all batches (row groups) from the dataset
-        all_batches = list(pyarrow_dataset.to_batches(batch_size=10_000))
-
-        # Determine the subset of batches for this dataset instance (for train/val split)
-        num_batches = len(all_batches)
-        start_idx = int(self.start_frac * num_batches)
-        end_idx = int(self.end_frac * num_batches)
-        target_batches = all_batches[start_idx:end_idx]
-
-        # Distribute work among workers
         worker_info = get_worker_info()
-        if worker_info is None:
-            # Single-process data loading, this process handles all its target batches
-            batches_for_this_worker = target_batches
-        else:
-            # Multi-process data loading, split the target batches among workers
-            num_workers = worker_info.num_workers
-            worker_id = worker_info.id
-            batches_for_this_worker = [
-                b for i, b in enumerate(target_batches) if i % num_workers == worker_id
-            ]
-
-        # Process and yield each row from the assigned batches
-        for batch in batches_for_this_worker:
-            df = batch.to_pandas()
-
-            df = df.sample(frac=1).reset_index(drop=True)
-
-            for _, row in df.iterrows():
-                yield self._process_row(row)
+        if worker_info is None: # Single-process data loading
+            for batch in scanner.to_batches():
+                # Shuffle indices to process rows in random order within the batch
+                indices = np.arange(len(batch))
+                np.random.shuffle(indices)
+                
+                # Convert batch to a more efficient dictionary of lists
+                data = batch.to_pydict()
+                
+                for i in indices:
+                    # Create a row-like dict for the processing function
+                    row = {key: val[i] for key, val in data.items()}
+                    yield self._process_row(row)
+        else: # Multi-process data loading
+            # Each worker will process a subset of batches
+            for i, batch in enumerate(scanner.to_batches()):
+                if i % worker_info.num_workers == worker_info.id:
+                    indices = np.arange(len(batch))
+                    np.random.shuffle(indices)
+                    data = batch.to_pydict()
+                    for idx in indices:
+                        row = {key: val[idx] for key, val in data.items()}
+                        yield self._process_row(row)
 
     def __len__(self):
-        """Returns the number of samples in the dataset."""
-        pyarrow_dataset = ds.dataset(self.parquet_path, format="parquet")
-        total_rows = pyarrow_dataset.count_rows()
-
-        # Calculate the number of rows in the subset for this instance
-        start_row = int(self.start_frac * total_rows)
-        end_row = int(self.end_frac * total_rows)
-
-        return end_row - start_row
+        return self.num_rows
 
     def _process_row(self, row):
         """Processes a single row from the Parquet file into tensors."""

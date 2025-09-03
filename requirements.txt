@@ -6,3 +6,4 @@ tqdm
 kagglehub
 python-chess
 pyarrow
+matplotlib

@@ -10,6 +10,7 @@ from tqdm import tqdm
 
 from torch.utils.data import DataLoader
 from src.dataset import IterablePositionsDataset
+from src.early_stopping import EarlyStopping
 
 
 def create_dataloaders(
@@ -75,6 +76,7 @@ def training(
     val_loader: DataLoader,
     optimizer: torch.optim.Optimizer,
     scheduler: ReduceLROnPlateau,
+    early_stopping: EarlyStopping,
     criterion: list[nn.Module],
     save_dir: str,
     device: torch.device,
@@ -136,6 +138,11 @@ def training(
 
         # Step the scheduler
         scheduler.step(avg_val_loss)
+
+        # Check early stopping
+        if early_stopping(avg_val_loss):
+            print(f"Early stopping triggered at epoch {epoch+1}")
+            break
 
         # Save the model if it is our best loss
         if avg_val_loss < best_loss:
