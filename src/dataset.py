@@ -151,7 +151,7 @@ class IterablePositionsDataset(IterableDataset):
         mate = row["mate"]
         cp = row["cp"]
 
-        if mate == 0.0 or np.isnan(mate):
+        if mate is None or mate == 0.0:
             game_state = 0  # Normal
             value = cp / 100.0
 
