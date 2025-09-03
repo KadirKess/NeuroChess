@@ -15,9 +15,7 @@ from src.all_moves import get_all_legal_moves
 
 class PositionsDataset(Dataset):
     def __init__(self, parquet_path: str):
-        self.df = pd.read_parquet(
-            parquet_path, columns=["fen", "evaluation_cp", "mate_in", "line"]
-        )
+        self.df = pd.read_parquet(parquet_path, columns=["fen", "cp", "mate", "line"])
 
         self._all_possible_moves = get_all_legal_moves()
 
@@ -107,10 +105,10 @@ class PositionsDataset(Dataset):
         board_tensor = self._get_board_tensor(row["fen"])
 
         # Process the evaluation and mate in
-        mate_in = row.get("mate_in")  # Use .get() for safety
+        mate_in = row.get("mate")  # Use .get() for safety
         if pd.isna(mate_in) or mate_in == 0:
             game_state_target = 0  # Normal
-            value_target = row["evaluation_cp"] / 100.0  # Convert to centipawns
+            value_target = row["cp"] / 100.0  # Convert to centipawns
         elif mate_in > 0:
             game_state_target = 1  # White Mate
             value_target = mate_in

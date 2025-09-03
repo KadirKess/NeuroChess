@@ -11,7 +11,7 @@ from src.utils.residual_block import ResidualBlock
 
 class ChessResNetModel(nn.Module):
     def __init__(self, num_blocks=[2, 2, 2]):
-        super(ChessResNetModel, self).__init__()
+        super().__init__()
 
         self.in_channels = 64
         self.num_moves = len(get_all_legal_moves())

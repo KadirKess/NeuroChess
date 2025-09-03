@@ -15,8 +15,8 @@ def create_dataloaders(
     train_dataset, val_dataset = torch.utils.data.random_split(
         dataset, [train_size, val_size]
     )
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=shuffle)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=shuffle, num_workers=4)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=4)
     return train_loader, val_loader
 
 
@@ -24,16 +24,17 @@ def validation(
     model: nn.Module,
     val_loader: DataLoader,
     criterion: list[nn.Module],
+    device: torch.device,
 ) -> float:
     model.eval()
     total_loss = 0.0
 
     with torch.no_grad():
         for batch in tqdm(val_loader, desc="Validation Progress"):
-            inputs = batch["board_tensor"]
-            best_move_target = batch["best_move"]
-            value_target = batch["value_target"]
-            game_state_target = batch["game_state_target"]
+            inputs = batch["board_tensor"].to(device)
+            best_move_target = batch["best_move"].to(device)
+            value_target = batch["value_target"].to(device)
+            game_state_target = batch["game_state_target"].to(device)
 
             outputs = model(inputs)
 
@@ -56,6 +57,7 @@ def training(
     scheduler: ReduceLROnPlateau,
     criterion: list[nn.Module],
     save_dir: str,
+    device: torch.device,
 ):
     # We will store the losses
     training_loss = []
@@ -76,10 +78,10 @@ def training(
         ):
 
             # We get the inputs and targets
-            inputs = batch["board_tensor"]
-            best_move_target = batch["best_move"]
-            value_target = batch["value_target"]
-            game_state_target = batch["game_state_target"]
+            inputs = batch["board_tensor"].to(device)
+            best_move_target = batch["best_move"].to(device)
+            value_target = batch["value_target"].to(device)
+            game_state_target = batch["game_state_target"].to(device)
 
             # Get the model outputs
             outputs = model(inputs)
@@ -102,7 +104,7 @@ def training(
         avg_train_loss = total_train_loss / len(train_loader)
 
         # Validation step
-        avg_val_loss = validation(model, val_loader, criterion)
+        avg_val_loss = validation(model, val_loader, criterion, device)
 
         # Log the losses
         training_loss.append(avg_train_loss.item())
@@ -124,3 +126,9 @@ def training(
             # Save the optimizer state
             optimizer_state = optimizer.state_dict()
             torch.save(optimizer_state, f"{save_dir}/best_optimizer.pth")
+
+            # Save the scheduler state
+            scheduler_state = scheduler.state_dict()
+            torch.save(scheduler_state, f"{save_dir}/best_scheduler.pth")
+
+    return training_loss, validation_loss
