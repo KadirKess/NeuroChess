@@ -1,0 +1,8 @@
+torch
+torchvision
+wandb
+pandas
+tqdm
+kagglehub
+python-chess
+pyarrow
