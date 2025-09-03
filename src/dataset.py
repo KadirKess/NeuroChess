@@ -80,8 +80,18 @@ def _get_board_tensor(fen: str) -> np.ndarray:
 
 class PositionsDataset(Dataset):
     def __init__(self, parquet_path):
-        self.data = pd.read_parquet(parquet_path, columns=["fen", "cp", "mate", "line"])
-        self.num_rows = len(self.data)
+        # Load the dataframe temporarily
+        data = pd.read_parquet(parquet_path, columns=["fen", "cp", "mate", "line"])
+        self.num_rows = len(data)
+
+        # Convert pandas columns to simpler, faster types (lists and numpy arrays)
+        self.fens = data["fen"].tolist()
+        self.lines = data["line"].tolist()
+        # Combine cp and mate into a single numpy array for efficiency
+        self.evals = data[["cp", "mate"]].to_numpy(dtype=np.float32)
+
+        # Delete the large DataFrame to free up memory
+        del data
 
         all_possible_moves = get_all_legal_moves()
         self.move_to_idx = {move: i for i, move in enumerate(all_possible_moves)}
@@ -91,14 +101,14 @@ class PositionsDataset(Dataset):
 
     def __getitem__(self, idx):
         """
-        Get a chess position by index and preprocess it on the fly.
+        Get a chess position by index. This is now much faster and more memory-stable.
         """
-        row = self.data.iloc[idx]
+        # Get data from the pre-converted lists and arrays
+        fen = self.fens[idx]
+        line = self.lines[idx]
+        cp, mate = self.evals[idx]
 
-        board_tensor = _get_board_tensor(row["fen"])
-
-        mate = row["mate"]
-        cp = row["cp"]
+        board_tensor = _get_board_tensor(fen)
 
         if pd.isna(mate) or mate == 0:
             game_state = 0  # Normal
@@ -110,7 +120,7 @@ class PositionsDataset(Dataset):
             game_state = 2  # Black Mate
             value = abs(mate)
 
-        first_move = row["line"].split(" ")[0]
+        first_move = line.split(" ")[0]
         best_move_idx = self.move_to_idx.get(first_move, -1)
 
         return {
