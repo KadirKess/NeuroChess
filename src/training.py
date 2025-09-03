@@ -16,10 +16,10 @@ def create_dataloaders(
         dataset, [train_size, val_size]
     )
     train_loader = DataLoader(
-        train_dataset, batch_size=batch_size, shuffle=shuffle, num_workers=0
+        train_dataset, batch_size=batch_size, shuffle=shuffle, num_workers=2
     )
     val_loader = DataLoader(
-        val_dataset, batch_size=batch_size, shuffle=False, num_workers=0
+        val_dataset, batch_size=batch_size, shuffle=False, num_workers=2
     )
     return train_loader, val_loader
 
