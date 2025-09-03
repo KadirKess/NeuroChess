@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import Dataset, DataLoader
+from torch.amp import GradScaler, autocast
 from tqdm import tqdm
 
 # Local imports
@@ -32,10 +33,10 @@ def create_dataloaders(
     )
 
     train_loader = DataLoader(
-        train_dataset, batch_size=batch_size, num_workers=5, pin_memory=True
+        train_dataset, batch_size=batch_size, num_workers=4, pin_memory=True
     )
     val_loader = DataLoader(
-        val_dataset, batch_size=batch_size, num_workers=5, pin_memory=True
+        val_dataset, batch_size=batch_size, num_workers=4, pin_memory=True
     )
 
     return train_loader, val_loader
@@ -57,13 +58,14 @@ def validation(
             value_target = batch["value_target"].to(device)
             game_state_target = batch["game_state_target"].to(device)
 
-            outputs = model(inputs)
+            with autocast():
+                outputs = model(inputs)
 
-            best_move_loss = criterion[0](outputs["best_move"], best_move_target)
-            value_loss = criterion[1](outputs["value"].squeeze(), value_target)
-            game_state_loss = criterion[2](outputs["game_state"], game_state_target)
+                best_move_loss = criterion[0](outputs["best_move"], best_move_target)
+                value_loss = criterion[1](outputs["value"].squeeze(), value_target)
+                game_state_loss = criterion[2](outputs["game_state"], game_state_target)
 
-            total_loss += (best_move_loss + value_loss + game_state_loss).item()
+                total_loss += (best_move_loss + value_loss + game_state_loss).item()
 
     avg_loss = total_loss / len(val_loader)
     return avg_loss
@@ -86,6 +88,8 @@ def training(
     validation_loss = []
     best_loss = float("inf")
 
+    scaler = GradScaler()
+
     for epoch in range(epochs):
 
         print(f"Starting epoch {epoch+1}/{epochs}")
@@ -105,20 +109,22 @@ def training(
             value_target = batch["value_target"].to(device)
             game_state_target = batch["game_state_target"].to(device)
 
-            # Get the model outputs
-            outputs = model(inputs)
+            with autocast():
+                # Get the model outputs
+                outputs = model(inputs)
 
-            # Compute the losses
-            best_move_loss = criterion[0](outputs["best_move"], best_move_target)
-            value_loss = criterion[1](outputs["value"].squeeze(), value_target)
-            game_state_loss = criterion[2](outputs["game_state"], game_state_target)
+                # Compute the losses
+                best_move_loss = criterion[0](outputs["best_move"], best_move_target)
+                value_loss = criterion[1](outputs["value"].squeeze(), value_target)
+                game_state_loss = criterion[2](outputs["game_state"], game_state_target)
 
-            total_loss = best_move_loss + value_loss + game_state_loss
+                total_loss = best_move_loss + value_loss + game_state_loss
 
             # Backpropagation
             optimizer.zero_grad()
-            total_loss.backward()
-            optimizer.step()
+            scaler.scale(total_loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
 
             total_train_loss += total_loss.item()
 
