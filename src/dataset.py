@@ -1,10 +1,13 @@
 # Imports
+
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import IterableDataset, get_worker_info
 import numpy as np
-import pandas as pd
+import pyarrow.dataset as ds
 import chess
-import pyarrow.parquet as pq
+
+# Local imports
+
 from src.all_moves import get_all_legal_moves
 
 
@@ -78,29 +81,57 @@ def _get_board_tensor(fen: str) -> np.ndarray:
     return board_tensor
 
 
-class PositionsDataset(Dataset):
-    def __init__(self, parquet_path):
-        self.data = pd.read_parquet(parquet_path, columns=["fen", "cp", "mate", "line"])
-        self.num_rows = len(self.data)
+class IterablePositionsDataset(IterableDataset):
+    def __init__(self, parquet_path, start_frac=0.0, end_frac=1.0):
+        super().__init__()
+        self.parquet_path = parquet_path
+        self.start_frac = start_frac
+        self.end_frac = end_frac
 
+        # This mapping is needed for each item, so we create it once
         all_possible_moves = get_all_legal_moves()
         self.move_to_idx = {move: i for i, move in enumerate(all_possible_moves)}
 
-    def __len__(self):
-        return self.num_rows
+    def __iter__(self):
+        # Create a pyarrow dataset - this is memory-efficient
+        pyarrow_dataset = ds.dataset(self.parquet_path, format="parquet")
 
-    def __getitem__(self, idx):
-        """
-        Get a chess position by index and preprocess it on the fly.
-        """
-        row = self.data.iloc[idx]
+        # Get all batches (row groups) from the dataset
+        all_batches = list(pyarrow_dataset.to_batches())
 
+        # Determine the subset of batches for this dataset instance (for train/val split)
+        num_batches = len(all_batches)
+        start_idx = int(self.start_frac * num_batches)
+        end_idx = int(self.end_frac * num_batches)
+        target_batches = all_batches[start_idx:end_idx]
+
+        # Distribute work among workers
+        worker_info = get_worker_info()
+        if worker_info is None:
+            # Single-process data loading, this process handles all its target batches
+            batches_for_this_worker = target_batches
+        else:
+            # Multi-process data loading, split the target batches among workers
+            num_workers = worker_info.num_workers
+            worker_id = worker_info.id
+            batches_for_this_worker = [
+                b for i, b in enumerate(target_batches) if i % num_workers == worker_id
+            ]
+
+        # Process and yield each row from the assigned batches
+        for batch in batches_for_this_worker:
+            df = batch.to_pandas()
+            for _, row in df.iterrows():
+                yield self._process_row(row)
+
+    def _process_row(self, row):
+        """Processes a single row from the Parquet file into tensors."""
         board_tensor = _get_board_tensor(row["fen"])
 
         mate = row["mate"]
         cp = row["cp"]
 
-        if pd.isna(mate) or mate == 0:
+        if mate == 0.0 or np.isnan(mate):
             game_state = 0  # Normal
             value = cp / 100.0
         elif mate > 0:

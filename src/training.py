@@ -6,21 +6,40 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 
+# Local imports
+
+from torch.utils.data import DataLoader
+from src.dataset import IterablePositionsDataset  # Updated import
+
 
 def create_dataloaders(
-    dataset: Dataset, batch_size: int, shuffle: bool = True, train_percent: float = 0.8
+    parquet_path: str, batch_size: int, train_percent: float = 0.8
 ) -> tuple[DataLoader, DataLoader]:
-    train_size = int(train_percent * len(dataset))
-    val_size = len(dataset) - train_size
-    train_dataset, val_dataset = torch.utils.data.random_split(
-        dataset, [train_size, val_size]
+    """
+    Creates training and validation dataloaders from an iterable dataset.
+    Note: Iterable datasets can't be split randomly after creation. We create
+    two separate dataset instances that stream from different portions of the file.
+    """
+    # Create a dataset instance for the training split
+    train_dataset = IterablePositionsDataset(
+        parquet_path, start_frac=0.0, end_frac=train_percent
     )
+
+    # Create a dataset instance for the validation split
+    val_dataset = IterablePositionsDataset(
+        parquet_path, start_frac=train_percent, end_frac=1.0
+    )
+
+    # Note: For iterable datasets, 'shuffle' is not applicable in the same way.
+    # Shuffling is often handled by the dataset's __iter__ method if needed.
+    # Here, we rely on the inherent randomness of the source data.
     train_loader = DataLoader(
-        train_dataset, batch_size=batch_size, shuffle=shuffle, num_workers=0
+        train_dataset, batch_size=batch_size, num_workers=2, pin_memory=True
     )
     val_loader = DataLoader(
-        val_dataset, batch_size=batch_size, shuffle=False, num_workers=0
+        val_dataset, batch_size=batch_size, num_workers=2, pin_memory=True
     )
+
     return train_loader, val_loader
 
 
