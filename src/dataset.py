@@ -114,7 +114,7 @@ class PositionsDataset(Dataset):
         best_move_idx = self.move_to_idx.get(first_move, -1)
 
         return {
-            "board_tensor": torch.from_numpy(board_tensor),
+            "board_tensor": torch.from_numpy(board_tensor).float(),
             "game_state_target": torch.tensor(game_state, dtype=torch.long),
             "value_target": torch.tensor(value, dtype=torch.float32),
             "best_move": torch.tensor(best_move_idx, dtype=torch.long),
