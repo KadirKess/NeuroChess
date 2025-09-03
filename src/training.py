@@ -96,7 +96,7 @@ def training(
         # Start training loop
         model.train()
 
-        for i, batch in enumerate(train_loader):
+        for i, batch in tqdm(enumerate(train_loader), desc="Training Progress"):
 
             # We get the inputs and targets
             inputs = batch["board_tensor"].to(device)
