@@ -96,11 +96,7 @@ def training(
         # Start training loop
         model.train()
 
-        for i, batch in tqdm(
-            enumerate(train_loader),
-            total=len(train_loader),
-            desc=f"Training progress",
-        ):
+        for i, batch in enumerate(train_loader):
 
             # We get the inputs and targets
             inputs = batch["board_tensor"].to(device)
@@ -124,6 +120,12 @@ def training(
             optimizer.step()
 
             total_train_loss += total_loss.item()
+
+            # Once ever 200 iterations, print the training loss
+            if i % 200 == 0:
+                print(
+                    f"Epoch {epoch+1}, Iteration {i}, Training Loss: {total_loss.item()}"
+                )
 
         # Compute the average training loss
         avg_train_loss = total_train_loss / len(train_loader)
