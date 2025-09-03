@@ -5,6 +5,7 @@ from torch.utils.data import IterableDataset, get_worker_info
 import numpy as np
 import pyarrow.dataset as ds
 import chess
+import random
 
 # Local imports
 
@@ -82,74 +83,97 @@ def _get_board_tensor(fen: str) -> np.ndarray:
 
 
 class IterablePositionsDataset(IterableDataset):
-    def __init__(self, parquet_path, start_frac=0.0, end_frac=1.0):
+    def __init__(
+        self, parquet_path, start_frac=0.0, end_frac=1.0, shuffle_buffer_size=0
+    ):
         super().__init__()
         self.parquet_path = parquet_path
         self.start_frac = start_frac
         self.end_frac = end_frac
+        self.shuffle_buffer_size = shuffle_buffer_size
 
-        # This mapping is needed for each item, so we create it once
         all_possible_moves = get_all_legal_moves()
         self.move_to_idx = {move: i for i, move in enumerate(all_possible_moves)}
 
-    def __iter__(self):
-        # Create a pyarrow dataset - this is memory-efficient
+    def _item_generator(self):
+        """A generator that yields processed items from the Parquet file."""
         pyarrow_dataset = ds.dataset(self.parquet_path, format="parquet")
-
-        # Get all batches (row groups) from the dataset
         all_batches = list(pyarrow_dataset.to_batches())
 
-        # Determine the subset of batches for this dataset instance (for train/val split)
         num_batches = len(all_batches)
         start_idx = int(self.start_frac * num_batches)
         end_idx = int(self.end_frac * num_batches)
         target_batches = all_batches[start_idx:end_idx]
 
-        # Distribute work among workers
         worker_info = get_worker_info()
         if worker_info is None:
-            # Single-process data loading, this process handles all its target batches
             batches_for_this_worker = target_batches
         else:
-            # Multi-process data loading, split the target batches among workers
             num_workers = worker_info.num_workers
             worker_id = worker_info.id
             batches_for_this_worker = [
                 b for i, b in enumerate(target_batches) if i % num_workers == worker_id
             ]
 
-        # Process and yield each row from the assigned batches
         for batch in batches_for_this_worker:
-            df = batch.to_pandas()
-            for _, row in df.iterrows():
-                yield self._process_row(row)
+            rows_as_dicts = batch.to_pylist()
+            for row_dict in rows_as_dicts:
+                yield self._process_row(row_dict)
 
-    def __len__(self):
-        """Returns the number of samples in the dataset."""
-        pyarrow_dataset = ds.dataset(self.parquet_path, format="parquet")
-        total_rows = pyarrow_dataset.count_rows()
+    def __iter__(self):
+        # If shuffle_buffer_size is 0 or less, don't shuffle.
+        if self.shuffle_buffer_size <= 0:
+            yield from self._item_generator()
+            return
 
-        # Calculate the number of rows in the subset for this instance
-        start_row = int(self.start_frac * total_rows)
-        end_row = int(self.end_frac * total_rows)
+        # Shuffle Buffer Logic
+        item_source = self._item_generator()
+        buffer = []
 
-        return end_row - start_row
+        # 1. Fill the buffer initially
+        try:
+            for _ in range(self.shuffle_buffer_size):
+                buffer.append(next(item_source))
+        except StopIteration:
+            # Dataset is smaller than the buffer size. Just shuffle what we have.
+            random.shuffle(buffer)
+            yield from buffer
+            return
+
+        # 2. Main loop: yield a random item and replace it
+        while buffer:
+            # Pick a random item to yield
+            idx = random.randrange(len(buffer))
+            item_to_yield = buffer[idx]
+
+            try:
+                # Replace it with the next item from the source
+                buffer[idx] = next(item_source)
+                yield item_to_yield
+            except StopIteration:
+                # Source is exhausted. Yield the rest of the buffer.
+                # To avoid yielding the same item twice, we swap the picked item
+                # with the last one and pop.
+                buffer[idx] = buffer[-1]
+                buffer.pop()
+                yield item_to_yield
 
     def _process_row(self, row):
-        """Processes a single row from the Parquet file into tensors."""
-        board_tensor = _get_board_tensor(row["fen"])
 
+        board_tensor = _get_board_tensor(row["fen"])
         mate = row["mate"]
         cp = row["cp"]
 
         if mate == 0.0 or np.isnan(mate):
             game_state = 0  # Normal
             value = cp / 100.0
+
         elif mate > 0:
-            game_state = 1  # White Mate
+            game_state = 1  # Checkmate for white
             value = mate
-        else:  # mate < 0
-            game_state = 2  # Black Mate
+
+        else:
+            game_state = 2  # Checkmate for black
             value = abs(mate)
 
         first_move = row["line"].split(" ")[0]

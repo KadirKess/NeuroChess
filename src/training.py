@@ -9,7 +9,7 @@ from tqdm import tqdm
 # Local imports
 
 from torch.utils.data import DataLoader
-from src.dataset import IterablePositionsDataset  # Updated import
+from src.dataset import IterablePositionsDataset
 
 
 def create_dataloaders(
@@ -22,12 +22,12 @@ def create_dataloaders(
     """
     # Create a dataset instance for the training split
     train_dataset = IterablePositionsDataset(
-        parquet_path, start_frac=0.0, end_frac=train_percent
+        parquet_path, start_frac=0.0, end_frac=train_percent, shuffle_buffer_size=10000
     )
 
     # Create a dataset instance for the validation split
     val_dataset = IterablePositionsDataset(
-        parquet_path, start_frac=train_percent, end_frac=1.0
+        parquet_path, start_frac=train_percent, end_frac=1.0, shuffle_buffer_size=10000
     )
 
     # Note: For iterable datasets, 'shuffle' is not applicable in the same way.
@@ -123,12 +123,6 @@ def training(
 
             total_train_loss += total_loss.item()
 
-            # Once ever 200 iterations, print the training loss
-            if i % 200 == 0:
-                print(
-                    f"\nEpoch {epoch+1}, Iteration {i}, Training Loss: {total_loss.item()}"
-                )
-
         # Compute the average training loss
         avg_train_loss = total_train_loss / len(train_loader)
 
@@ -140,7 +134,7 @@ def training(
         validation_loss.append(avg_val_loss)
 
         print(
-            f"Epoch {epoch+1}/{epochs}, Training Loss: {avg_train_loss.item()}, Validation Loss: {avg_val_loss}"
+            f"Epoch {epoch+1}/{epochs}, Training Loss: {avg_train_loss}, Validation Loss: {avg_val_loss}"
         )
 
         # Step the scheduler
