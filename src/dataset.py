@@ -3,7 +3,7 @@
 import torch
 from torch.utils.data import IterableDataset, get_worker_info
 import numpy as np
-import pyarrow.dataset as ds
+import pyarrow.parquet as pq
 import chess
 
 # Local imports
@@ -82,74 +82,46 @@ def _get_board_tensor(fen: str) -> np.ndarray:
 
 
 class IterablePositionsDataset(IterableDataset):
-    def __init__(self, parquet_path, batch_size, start_frac=0.0, end_frac=1.0):
+    def __init__(self, parquet_paths: list[str]):
         super().__init__()
-        self.parquet_path = parquet_path
-        self.batch_size = batch_size
+        self.parquet_paths = parquet_paths
 
-        # Get total rows once for splitting
-        pyarrow_dataset = ds.dataset(self.parquet_path, format="parquet")
-        self.total_rows = pyarrow_dataset.count_rows()
-        self.start_row = int(start_frac * self.total_rows)
-        self.end_row = int(end_frac * self.total_rows)
-        self.num_rows = self.end_row - self.start_row
+        # Pre-calculate total number of rows for __len__
+        self.total_rows = 0
+        for path in self.parquet_paths:
+            self.total_rows += pq.ParquetFile(path).num_rows
 
         # This mapping is needed for each item, so we create it once
         all_possible_moves = get_all_legal_moves()
         self.move_to_idx = {move: i for i, move in enumerate(all_possible_moves)}
 
     def __iter__(self):
-        worker_info = torch.utils.data.get_worker_info()
-        if worker_info is None:
-            worker_id = 0
-            num_workers = 1
-        else:
-            worker_id = worker_info.id
-            num_workers = worker_info.num_workers
-
-        chunk_size = self.num_rows // num_workers
-        start_row = worker_id * chunk_size
-        end_row = start_row + chunk_size
-        if worker_id == num_workers - 1:
-            end_row = self.num_rows
-
-        pyarrow_dataset = ds.dataset(self.parquet_path, format="parquet")
-
-        # Create a scanner that will read only the required rows
-        scanner = pyarrow_dataset.scanner(
-            skip_rows=start_row,
-            limit=end_row - start_row,
-            batch_size=self.batch_size,
-            columns={"fen": True, "mate": True, "cp": True, "line": True},
-        )
-
         worker_info = get_worker_info()
-        if worker_info is None:  # Single-process data loading
-            for batch in scanner.to_batches():
-                # Shuffle indices to process rows in random order within the batch
-                indices = np.arange(len(batch))
-                np.random.shuffle(indices)
+        
+        # This loop iterates through the list of files assigned to this dataset
+        for path in self.parquet_paths:
+            parquet_file = pq.ParquetFile(path)
+            
+            # This loop streams batches of rows efficiently from a single file
+            for i, batch in enumerate(parquet_file.iter_batches(batch_size=2048)):
+                # This is the standard way to distribute work in an IterableDataset
+                if worker_info is None: # Single-process data loading
+                    should_process_batch = True
+                else: # Multi-process data loading
+                    should_process_batch = (i % worker_info.num_workers == worker_info.id)
 
-                # Convert batch to a more efficient dictionary of lists
-                data = batch.to_pydict()
-
-                for i in indices:
-                    # Create a row-like dict for the processing function
-                    row = {key: val[i] for key, val in data.items()}
-                    yield self._process_row(row)
-        else:  # Multi-process data loading
-            # Each worker will process a subset of batches
-            for i, batch in enumerate(scanner.to_batches()):
-                if i % worker_info.num_workers == worker_info.id:
-                    indices = np.arange(len(batch))
-                    np.random.shuffle(indices)
+                if should_process_batch:
                     data = batch.to_pydict()
-                    for idx in indices:
-                        row = {key: val[idx] for key, val in data.items()}
+                    indices = np.arange(len(batch))
+                    np.random.shuffle(indices) # Shuffle rows within the batch
+
+                    for i in indices:
+                        row = {key: val[i] for key, val in data.items()}
                         yield self._process_row(row)
 
     def __len__(self):
-        return self.num_rows
+        return self.total_rows
+
 
     def _process_row(self, row):
         """Processes a single row from the Parquet file into tensors."""
