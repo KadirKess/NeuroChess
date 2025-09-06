@@ -37,8 +37,18 @@ def _get_board_tensor(fen: str) -> np.ndarray:
 
     # 1. Piece Placement (Channels 0-11)
     piece_to_channel = {
-        "P": 0, "N": 1, "B": 2, "R": 3, "Q": 4, "K": 5,
-        "p": 6, "n": 7, "b": 8, "r": 9, "q": 10, "k": 11,
+        "P": 0,
+        "N": 1,
+        "B": 2,
+        "R": 3,
+        "Q": 4,
+        "K": 5,
+        "p": 6,
+        "n": 7,
+        "b": 8,
+        "r": 9,
+        "q": 10,
+        "k": 11,
     }
     rows = piece_placement.split("/")
     for r, row_str in enumerate(rows):
@@ -85,11 +95,64 @@ class IterablePositionsDataset(IterableDataset):
             total_rows += pq_file.metadata.num_rows
         self.num_rows = total_rows
 
+        # It's recommended to pre-compute this list and save it as a constant
+        # in a separate file (e.g., `src/legal_moves.py`) to avoid re-computing it.
         all_possible_moves = get_all_legal_moves()
         self.move_to_idx = {move: i for i, move in enumerate(all_possible_moves)}
 
-    def _row_generator(self):
-        """A generator that yields processed rows from all Parquet files."""
+    def _process_batch(self, batch_data):
+        """Processes a batch of rows from the Parquet file into tensors."""
+        fens = batch_data["fen"]
+        n_samples = len(fens)
+
+        # 1. Batch process FENs to board tensors
+        board_tensors = np.array([_get_board_tensor(fen) for fen in fens])
+
+        # 2. Vectorize target creation using NumPy
+        # In pandas/pyarrow, 'None' becomes NaN for numeric types
+        mates = np.array(batch_data["mate"], dtype=np.float32)
+        cps = np.array(batch_data["cp"], dtype=np.float32)
+
+        game_states = np.zeros(n_samples, dtype=np.int64)
+        values = np.zeros(n_samples, dtype=np.float32)
+
+        # Create boolean masks for each game state
+        is_normal = np.isnan(mates) | (mates == 0)
+        is_white_mate = mates > 0
+        is_black_mate = mates < 0
+
+        # Apply conditions using masks for vectorization
+        game_states[is_normal] = 0
+        values[is_normal] = cps[is_normal] / 100.0
+
+        game_states[is_white_mate] = 1
+        values[is_white_mate] = mates[is_white_mate]
+
+        game_states[is_black_mate] = 2
+        values[is_black_mate] = np.abs(mates[is_black_mate])
+
+        # 3. Batch process best moves
+        lines = batch_data["line"]
+        first_moves = [line.split(" ")[0] if line else "" for line in lines]
+        best_move_indices = np.array(
+            [self.move_to_idx.get(move, -1) for move in first_moves], dtype=np.int64
+        )
+
+        # Create a list of dictionaries to be yielded
+        processed_items = []
+        for i in range(n_samples):
+            processed_items.append(
+                {
+                    "board_tensor": torch.from_numpy(board_tensors[i]).float(),
+                    "game_state_target": torch.tensor(game_states[i], dtype=torch.long),
+                    "value_target": torch.tensor(values[i], dtype=torch.float32),
+                    "best_move": torch.tensor(best_move_indices[i], dtype=torch.long),
+                }
+            )
+        return processed_items
+
+    def _item_generator(self):
+        """A generator that yields processed items from all Parquet files."""
         worker_info = get_worker_info()
         batch_idx = -1
 
@@ -99,28 +162,33 @@ class IterablePositionsDataset(IterableDataset):
                 for batch in pq_file.iter_batches(batch_size=2048, row_groups=[rg]):
                     batch_idx += 1
 
-                    # Distribute batches among workers
-                    if worker_info and (batch_idx % worker_info.num_workers != worker_info.id):
+                    # Distribute batch processing among workers
+                    if worker_info and (
+                        batch_idx % worker_info.num_workers != worker_info.id
+                    ):
                         continue
 
                     data = batch.to_pydict()
-                    indices = np.arange(len(batch))
-                    np.random.shuffle(indices) # Shuffle within the batch
 
-                    for i in indices:
-                        row = {key: val[i] for key, val in data.items()}
-                        yield self._process_row(row)
+                    # Process the entire batch at once
+                    processed_batch = self._process_batch(data)
+
+                    # Shuffle within the processed batch before yielding
+                    random.shuffle(processed_batch)
+
+                    for item in processed_batch:
+                        yield item
 
     def __iter__(self):
         if self.shuffle_buffer_size > 0:
             # Implement shuffle buffer
             buffer = []
-            row_gen = self._row_generator()
+            item_gen = self._item_generator()
 
             # Initially fill the buffer
             try:
                 for _ in range(self.shuffle_buffer_size):
-                    buffer.append(next(row_gen))
+                    buffer.append(next(item_gen))
             except StopIteration:
                 # If dataset is smaller than buffer, just shuffle and yield
                 random.shuffle(buffer)
@@ -129,7 +197,7 @@ class IterablePositionsDataset(IterableDataset):
                 return
 
             # Stream the rest of the data, replacing items in the buffer
-            for item in row_gen:
+            for item in item_gen:
                 idx_to_yield = random.randint(0, self.shuffle_buffer_size - 1)
                 yield buffer[idx_to_yield]
                 buffer[idx_to_yield] = item
@@ -140,34 +208,7 @@ class IterablePositionsDataset(IterableDataset):
                 yield item
         else:
             # No shuffling, just yield directly
-            yield from self._row_generator()
+            yield from self._item_generator()
 
     def __len__(self):
         return self.num_rows
-
-    def _process_row(self, row):
-        """Processes a single row from the Parquet file into tensors."""
-        board_tensor = _get_board_tensor(row["fen"])
-
-        mate = row["mate"]
-        cp = row["cp"]
-
-        if mate is None or mate == 0.0:
-            game_state = 0  # Normal
-            value = cp / 100.0
-        elif mate > 0:
-            game_state = 1  # White Mate
-            value = mate
-        else:  # mate < 0
-            game_state = 2  # Black Mate
-            value = abs(mate)
-
-        first_move = row["line"].split(" ")[0]
-        best_move_idx = self.move_to_idx.get(first_move, -1)
-
-        return {
-            "board_tensor": torch.from_numpy(board_tensor).float(),
-            "game_state_target": torch.tensor(game_state, dtype=torch.long),
-            "value_target": torch.tensor(value, dtype=torch.float32),
-            "best_move": torch.tensor(best_move_idx, dtype=torch.long),
-        }
