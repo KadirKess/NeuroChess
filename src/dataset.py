@@ -11,6 +11,7 @@ from typing import List
 # Local imports
 
 from src.all_moves import get_all_legal_moves
+from src.fen_parser import parse_fen
 
 
 # Helper function to expand a single row of a FEN's piece placement section
@@ -106,7 +107,7 @@ class IterablePositionsDataset(IterableDataset):
         n_samples = len(fens)
 
         # 1. Batch process FENs to board tensors
-        board_tensors = np.array([_get_board_tensor(fen) for fen in fens])
+        board_tensors = np.array([parse_fen(fen) for fen in fens])
 
         # 2. Vectorize target creation using NumPy
         # In pandas/pyarrow, 'None' becomes NaN for numeric types
