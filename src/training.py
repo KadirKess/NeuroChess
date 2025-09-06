@@ -19,6 +19,7 @@ def create_dataloaders(
     batch_size: int,
     train_percent: float = 0.8,
     shuffle_buffer_size: int = 100_000,
+    num_workers: int = 10,
 ) -> tuple[DataLoader, DataLoader]:
     """
     Creates training and validation dataloaders from an iterable dataset.
@@ -27,7 +28,9 @@ def create_dataloaders(
     num_files = len(parquet_paths)
 
     if num_files < 2:
-        print("Warning: Only one Parquet file provided. Using it for both training and validation.")
+        print(
+            "Warning: Only one Parquet file provided. Using it for both training and validation."
+        )
         train_files = parquet_paths
         val_files = parquet_paths
     else:
@@ -35,11 +38,13 @@ def create_dataloaders(
         # Ensure at least one file for validation
         if split_index == num_files:
             split_index -= 1
-        
+
         train_files = parquet_paths[:split_index]
         val_files = parquet_paths[split_index:]
 
-    print(f"Using {len(train_files)} files for training and {len(val_files)} for validation.")
+    print(
+        f"Using {len(train_files)} files for training and {len(val_files)} for validation."
+    )
 
     # Create a dataset instance for the training split with shuffling
     train_dataset = IterablePositionsDataset(
@@ -52,10 +57,10 @@ def create_dataloaders(
     )
 
     train_loader = DataLoader(
-        train_dataset, batch_size=batch_size, num_workers=10, pin_memory=True
+        train_dataset, batch_size=batch_size, num_workers=num_workers, pin_memory=True
     )
     val_loader = DataLoader(
-        val_dataset, batch_size=batch_size, num_workers=10, pin_memory=True
+        val_dataset, batch_size=batch_size, num_workers=num_workers, pin_memory=True
     )
 
     return train_loader, val_loader
