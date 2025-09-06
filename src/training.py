@@ -3,33 +3,52 @@
 import torch
 import torch.nn as nn
 from torch.optim.lr_scheduler import ReduceLROnPlateau
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import DataLoader
 from torch.amp import GradScaler, autocast
 from tqdm import tqdm
+from typing import List
 
 # Local imports
 
-from torch.utils.data import DataLoader
 from src.dataset import IterablePositionsDataset
 from src.early_stopping import EarlyStopping
 
 
 def create_dataloaders(
-    parquet_path: str, batch_size: int, train_percent: float = 0.8
+    parquet_paths: List[str],
+    batch_size: int,
+    train_percent: float = 0.8,
+    shuffle_buffer_size: int = 100_000,
 ) -> tuple[DataLoader, DataLoader]:
     """
     Creates training and validation dataloaders from an iterable dataset.
-    Note: Iterable datasets can't be split randomly after creation. We create
-    two separate dataset instances that stream from different portions of the file.
+    Splits the list of parquet files into training and validation sets.
     """
-    # Create a dataset instance for the training split
+    num_files = len(parquet_paths)
+
+    if num_files < 2:
+        print("Warning: Only one Parquet file provided. Using it for both training and validation.")
+        train_files = parquet_paths
+        val_files = parquet_paths
+    else:
+        split_index = int(num_files * train_percent)
+        # Ensure at least one file for validation
+        if split_index == num_files:
+            split_index -= 1
+        
+        train_files = parquet_paths[:split_index]
+        val_files = parquet_paths[split_index:]
+
+    print(f"Using {len(train_files)} files for training and {len(val_files)} for validation.")
+
+    # Create a dataset instance for the training split with shuffling
     train_dataset = IterablePositionsDataset(
-        parquet_path, start_frac=0.0, end_frac=train_percent
+        train_files, shuffle_buffer_size=shuffle_buffer_size
     )
 
-    # Create a dataset instance for the validation split
+    # Create a dataset instance for the validation split without shuffling
     val_dataset = IterablePositionsDataset(
-        parquet_path, start_frac=train_percent, end_frac=1.0
+        val_files, shuffle_buffer_size=0  # No need to shuffle validation data
     )
 
     train_loader = DataLoader(

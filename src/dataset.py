@@ -5,6 +5,8 @@ from torch.utils.data import IterableDataset, get_worker_info
 import numpy as np
 import pyarrow.parquet as pq
 import chess
+import random
+from typing import List
 
 # Local imports
 
@@ -35,18 +37,8 @@ def _get_board_tensor(fen: str) -> np.ndarray:
 
     # 1. Piece Placement (Channels 0-11)
     piece_to_channel = {
-        "P": 0,
-        "N": 1,
-        "B": 2,
-        "R": 3,
-        "Q": 4,
-        "K": 5,
-        "p": 6,
-        "n": 7,
-        "b": 8,
-        "r": 9,
-        "q": 10,
-        "k": 11,
+        "P": 0, "N": 1, "B": 2, "R": 3, "Q": 4, "K": 5,
+        "p": 6, "n": 7, "b": 8, "r": 9, "q": 10, "k": 11,
     }
     rows = piece_placement.split("/")
     for r, row_str in enumerate(rows):
@@ -82,64 +74,73 @@ def _get_board_tensor(fen: str) -> np.ndarray:
 
 
 class IterablePositionsDataset(IterableDataset):
-    def __init__(
-        self, parquet_path: str, start_frac: float = 0.0, end_frac: float = 1.0
-    ):
+    def __init__(self, parquet_paths: List[str], shuffle_buffer_size: int = 0):
         super().__init__()
-        self.parquet_path = parquet_path
+        self.parquet_paths = parquet_paths
+        self.shuffle_buffer_size = shuffle_buffer_size
 
-        pq_file = pq.ParquetFile(parquet_path)
-        total_rows = pq_file.metadata.num_rows
-
-        self.start_row = int(start_frac * total_rows)
-        self.end_row = int(end_frac * total_rows)
-        self.num_rows = self.end_row - self.start_row
+        total_rows = 0
+        for path in self.parquet_paths:
+            pq_file = pq.ParquetFile(path)
+            total_rows += pq_file.metadata.num_rows
+        self.num_rows = total_rows
 
         all_possible_moves = get_all_legal_moves()
         self.move_to_idx = {move: i for i, move in enumerate(all_possible_moves)}
 
-    def __iter__(self):
+    def _row_generator(self):
+        """A generator that yields processed rows from all Parquet files."""
         worker_info = get_worker_info()
-        pq_file = pq.ParquetFile(self.parquet_path)
-
-        rows_seen = 0
         batch_idx = -1
 
-        for rg in range(pq_file.num_row_groups):
-            for batch in pq_file.iter_batches(batch_size=2048, row_groups=[rg]):
-                batch_idx += 1
+        for path in self.parquet_paths:
+            pq_file = pq.ParquetFile(path)
+            for rg in range(pq_file.num_row_groups):
+                for batch in pq_file.iter_batches(batch_size=2048, row_groups=[rg]):
+                    batch_idx += 1
 
-                # Distribute batches among workers
-                if worker_info and (
-                    batch_idx % worker_info.num_workers != worker_info.id
-                ):
-                    rows_seen += len(batch)
-                    continue
+                    # Distribute batches among workers
+                    if worker_info and (batch_idx % worker_info.num_workers != worker_info.id):
+                        continue
 
-                batch_start_row = rows_seen
-                batch_end_row = rows_seen + len(batch)
-                rows_seen = batch_end_row
+                    data = batch.to_pydict()
+                    indices = np.arange(len(batch))
+                    np.random.shuffle(indices) # Shuffle within the batch
 
-                # Check if this batch overlaps with the desired slice
-                if batch_end_row < self.start_row or batch_start_row >= self.end_row:
-                    continue
+                    for i in indices:
+                        row = {key: val[i] for key, val in data.items()}
+                        yield self._process_row(row)
 
-                # Calculate the slice of the batch we need
-                slice_start = max(0, self.start_row - batch_start_row)
-                slice_end = min(len(batch), self.end_row - batch_start_row)
+    def __iter__(self):
+        if self.shuffle_buffer_size > 0:
+            # Implement shuffle buffer
+            buffer = []
+            row_gen = self._row_generator()
 
-                if slice_start >= slice_end:
-                    continue
+            # Initially fill the buffer
+            try:
+                for _ in range(self.shuffle_buffer_size):
+                    buffer.append(next(row_gen))
+            except StopIteration:
+                # If dataset is smaller than buffer, just shuffle and yield
+                random.shuffle(buffer)
+                for item in buffer:
+                    yield item
+                return
 
-                sliced_batch = batch.slice(slice_start, slice_end - slice_start)
+            # Stream the rest of the data, replacing items in the buffer
+            for item in row_gen:
+                idx_to_yield = random.randint(0, self.shuffle_buffer_size - 1)
+                yield buffer[idx_to_yield]
+                buffer[idx_to_yield] = item
 
-                data = sliced_batch.to_pydict()
-                indices = np.arange(len(sliced_batch))
-                np.random.shuffle(indices)
-
-                for i in indices:
-                    row = {key: val[i] for key, val in data.items()}
-                    yield self._process_row(row)
+            # Yield remaining items in the buffer
+            random.shuffle(buffer)
+            for item in buffer:
+                yield item
+        else:
+            # No shuffling, just yield directly
+            yield from self._row_generator()
 
     def __len__(self):
         return self.num_rows
@@ -154,7 +155,6 @@ class IterablePositionsDataset(IterableDataset):
         if mate is None or mate == 0.0:
             game_state = 0  # Normal
             value = cp / 100.0
-
         elif mate > 0:
             game_state = 1  # White Mate
             value = mate
